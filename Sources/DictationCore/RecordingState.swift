@@ -50,6 +50,11 @@ public struct RecordingState: Sendable {
         return .finish
     }
 
+    public mutating func finishWithEnter(enabled: Bool) -> RecordingEffect? {
+        guard enabled, phase == .recording(.toggle) else { return nil }
+        return finish()
+    }
+
     public mutating func complete() {
         phase = .idle
     }

@@ -9,7 +9,8 @@ struct RecordingStateTests {
         checks.testShortcutValidationRejectsCollisionsAndPlainTyping()
         checks.testInputLanguageUsesOnlyTheActiveSourcesPrimaryLanguage()
         checks.testCarbonModifiersKeepStoredShortcutMeaning()
-        print("7 dictation core checks passed.")
+        checks.testEnterOnlyFinishesEnabledToggleRecording()
+        print("8 dictation core checks passed.")
     }
 
     private func XCTAssertEqual<T: Equatable>(_ left: T, _ right: T) { precondition(left == right) }
@@ -88,5 +89,22 @@ struct RecordingStateTests {
         XCTAssertEqual(Shortcut(keyCode: 49, modifiers: (1 << 17) | (1 << 20)).carbonModifiers, 0x0300)
         XCTAssertEqual(Shortcut(keyCode: 49, modifiers: Shortcut.modifierMask).carbonModifiers, 0x1B00)
         XCTAssertEqual(Shortcut(keyCode: 53, modifiers: 0).carbonModifiers, 0)
+    }
+
+    func testEnterOnlyFinishesEnabledToggleRecording() {
+        var state = RecordingState()
+        XCTAssertNil(state.finishWithEnter(enabled: true))
+        _ = state.press(.hold)
+        XCTAssertNil(state.finishWithEnter(enabled: true))
+        XCTAssertEqual(state.phase, .recording(.hold))
+        _ = state.cancel()
+        _ = state.press(.toggle)
+        XCTAssertNil(state.finishWithEnter(enabled: false))
+        XCTAssertEqual(state.phase, .recording(.toggle))
+        XCTAssertEqual(state.finishWithEnter(enabled: true), .finish)
+        XCTAssertEqual(state.phase, .transcribing)
+        XCTAssertNil(state.finishWithEnter(enabled: true))
+        _ = state.cancel()
+        XCTAssertNil(state.finishWithEnter(enabled: true))
     }
 }

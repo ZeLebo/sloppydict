@@ -80,6 +80,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem?.button?.image = NSImage(systemSymbolName: recording ? "record.circle.fill" : "mic", accessibilityDescription: controller.status)
         statusItem?.button?.contentTintColor = recording ? .systemRed : nil
         let menu = NSMenu()
+        menu.autoenablesItems = false
         let status = menu.addItem(withTitle: controller.status, action: nil, keyEquivalent: "")
         status.isEnabled = false
         if recording {
@@ -90,6 +91,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let cancel = menu.addItem(withTitle: "Отменить диктовку", action: #selector(cancel), keyEquivalent: "")
             cancel.target = self
         }
+        menu.addItem(.separator())
+        let appearance = menu.addItem(withTitle: "Оформление плашки", action: nil, keyEquivalent: "")
+        let appearanceMenu = NSMenu()
+        appearanceMenu.autoenablesItems = false
+        for style in HUDStyle.allCases {
+            let item = appearanceMenu.addItem(withTitle: style.title, action: #selector(selectHUDStyle(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = style.rawValue
+            item.state = controller.hudStyle == style ? .on : .off
+        }
+        appearance.submenu = appearanceMenu
+        let textSize = menu.addItem(withTitle: "Размер текста в плашке", action: nil, keyEquivalent: "")
+        let textSizeMenu = NSMenu()
+        textSizeMenu.autoenablesItems = false
+        for size in HUDTextSize.allCases {
+            let item = textSizeMenu.addItem(withTitle: size.title, action: #selector(selectHUDTextSize(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = size.rawValue
+            item.state = controller.hudTextSize == size ? .on : .off
+        }
+        textSize.submenu = textSizeMenu
+        let preview = menu.addItem(withTitle: "Расшифровка во время речи", action: #selector(toggleLiveTranscript), keyEquivalent: "")
+        preview.target = self
+        preview.state = controller.showsLiveTranscript ? .on : .off
+        preview.isEnabled = !controller.busy
+        let enter = menu.addItem(withTitle: "Enter завершает старт/стоп запись", action: #selector(toggleFinishOnEnter), keyEquivalent: "")
+        enter.target = self
+        enter.state = controller.finishOnEnter ? .on : .off
+        enter.isEnabled = !controller.busy
         menu.addItem(.separator())
         let settings = menu.addItem(withTitle: "Настройки…", action: #selector(showSettings), keyEquivalent: ",")
         settings.target = self
@@ -113,6 +143,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func finish() { controller.finishRecording() }
+    @objc private func selectHUDStyle(_ sender: NSMenuItem) {
+        guard let value = sender.representedObject as? String, let style = HUDStyle(rawValue: value) else { return }
+        controller.hudStyle = style
+    }
+    @objc private func toggleLiveTranscript() { controller.showsLiveTranscript.toggle() }
+    @objc private func selectHUDTextSize(_ sender: NSMenuItem) {
+        guard let value = sender.representedObject as? Double, let size = HUDTextSize(rawValue: value) else { return }
+        controller.hudTextSize = size
+    }
+    @objc private func toggleFinishOnEnter() { controller.finishOnEnter.toggle() }
     @objc private func cancel() { controller.cancel() }
     @objc private func quit() { NSApp.terminate(nil) }
 

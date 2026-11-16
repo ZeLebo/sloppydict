@@ -41,6 +41,10 @@ final class AudioRecorder {
         accumulator = nil
         return samples
     }
+
+    func previewSamples() -> [Float] {
+        accumulator?.snapshot() ?? []
+    }
 }
 
 // AVAudioConverter is used only inside the tap; the lock also protects stop's snapshot.
@@ -104,5 +108,12 @@ private final class AudioAccumulator: @unchecked Sendable {
         let result = samples
         samples = []
         return result
+    }
+
+    func snapshot() -> [Float] {
+        lock.lock()
+        defer { lock.unlock() }
+        // Only the visible tail is previewed; final recognition still receives the whole recording.
+        return Array(samples.suffix(16_000 * 15))
     }
 }

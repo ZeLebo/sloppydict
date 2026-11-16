@@ -43,7 +43,32 @@ struct HotkeyEventChecks {
         ReleaseEvent(afterStop)
         await drainQueue()
         precondition(received.count == 3, "Stopped receivers must stay inactive")
-        print("6 isolated hotkey callback checks passed. No shortcuts registered, no events posted.")
+        checkFinishingKeys()
+        print("10 isolated hotkey checks passed. No shortcuts registered, no events posted.")
+    }
+
+    private static func checkFinishingKeys() {
+        var state = FinishingHotkeys()
+        precondition(state.release(1) == .ignore)
+        state.activate([1, 2])
+        precondition(state.release(1) == .finish)
+        precondition(state.release(99) == .ignore, "Unrelated or retired identifiers must not finish recording")
+
+        precondition(state.deactivate(pressed: [1]) == [2])
+        precondition(state.retiring == [1] && !state.enabled)
+        precondition(state.release(1) == .unregister, "A held Enter stays swallowed until release after cancellation")
+        precondition(state.retiring.isEmpty)
+
+        state.activate([3, 4])
+        precondition(state.deactivate(pressed: [3]) == [4])
+        state.activate([5])
+        precondition(state.release(3) == .keepRegistered, "Releasing an old press must not finish a new recording")
+        precondition(state.active == [3, 5])
+        precondition(state.release(3) == .finish, "The next complete press can finish the new recording")
+
+        precondition(state.deactivate(pressed: []) == [3, 5])
+        precondition(!state.enabled && state.active.isEmpty && state.retiring.isEmpty)
+        precondition(state.release(3) == .ignore)
     }
 
     private static func makeEvent(

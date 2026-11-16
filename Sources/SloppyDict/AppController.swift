@@ -18,6 +18,32 @@ final class AppController: ObservableObject {
     @Published var outputMode = OutputMode.paste {
         didSet { UserDefaults.standard.set(outputMode.rawValue, forKey: "outputMode") }
     }
+    @Published var hudStyle = HUDStyle.standard {
+        didSet {
+            UserDefaults.standard.set(hudStyle.rawValue, forKey: "hudStyle")
+            onStatusChanged?()
+        }
+    }
+    @Published var hudTextSize = HUDTextSize.standard {
+        didSet {
+            UserDefaults.standard.set(hudTextSize.rawValue, forKey: "hudTextSize")
+            onStatusChanged?()
+        }
+    }
+    @Published var showsLiveTranscript = false {
+        didSet {
+            UserDefaults.standard.set(showsLiveTranscript, forKey: "showsLiveTranscript")
+            onStatusChanged?()
+        }
+    }
+    @Published var finishOnEnter = false {
+        didSet {
+            UserDefaults.standard.set(finishOnEnter, forKey: "finishOnEnter")
+            updateStatus()
+        }
+    }
+    @Published private(set) var liveTranscript = ""
+    @Published private(set) var liveTranscriptError = ""
     @Published private(set) var recordingStartedAt: Date?
     @Published private(set) var notice: DictationNotice?
     @Published var message = ""
@@ -27,6 +53,7 @@ final class AppController: ObservableObject {
     let hotkeys = HotkeyMonitor()
     private let transcriber = Transcriber()
     private let recorder = AudioRecorder()
+    private let liveTranscription = LiveTranscription()
     private var modelTask: Task<Void, Never>?
     private var transcriptionTask: Task<Void, Never>?
     private var session: UUID?
@@ -70,9 +97,21 @@ final class AppController: ObservableObject {
         if let value = UserDefaults.standard.string(forKey: "outputMode"), let saved = OutputMode(rawValue: value) {
             outputMode = saved
         }
+        if let value = UserDefaults.standard.string(forKey: "hudStyle"), let saved = HUDStyle(rawValue: value) {
+            hudStyle = saved
+        }
+        if let saved = HUDTextSize(rawValue: UserDefaults.standard.double(forKey: "hudTextSize")) {
+            hudTextSize = saved
+        }
+        showsLiveTranscript = UserDefaults.standard.bool(forKey: "showsLiveTranscript")
+        finishOnEnter = UserDefaults.standard.bool(forKey: "finishOnEnter")
         hotkeys.shortcuts = shortcuts
         hotkeys.onKey = { [weak self] mode, down in self?.handle(mode, down: down) }
         hotkeys.onCancel = { [weak self] in self?.cancel() }
+        hotkeys.onFinish = { [weak self] in
+            guard let self else { return }
+            self.perform(self.machine.finishWithEnter(enabled: self.finishOnEnter))
+        }
         for name in [NSWorkspace.willSleepNotification, NSWorkspace.sessionDidResignActiveNotification] {
             observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 Task { @MainActor in self?.cancel() }
@@ -224,10 +263,13 @@ final class AppController: ObservableObject {
                 let id = UUID()
                 session = id
                 result = ""
+                liveTranscript = ""
+                liveTranscriptError = ""
                 message = ""
                 notice = nil
                 recordingStartedAt = Date()
                 try hotkeys.setCancellationEnabled(true)
+                try hotkeys.setFinishingEnabled(finishOnEnter && phase == .recording(.toggle))
                 try recorder.start(onLimit: { [weak self] in
                     Task { @MainActor in
                         guard let self, self.session == id, case .recording = self.phase else { return }
@@ -240,6 +282,7 @@ final class AppController: ObservableObject {
                         self.presentNotice("Ошибка записи", detail: error, tone: .error)
                     }
                 })
+                if showsLiveTranscript { startLiveTranscription(session: id) }
             } catch {
                 recorder.stop()
                 machine.complete()
@@ -248,36 +291,37 @@ final class AppController: ObservableObject {
                 presentNotice("Не удалось начать запись", detail: error.localizedDescription, tone: .error)
             }
         case .finish:
+            let preview = liveTranscription.stop()
             let samples = recorder.stop()
             recordingStartedAt = nil
             let id = session
             let target = target
             let hint = sessionLanguage
             let output = sessionOutputMode
-            guard samples.count >= 3200,
-                  samples.allSatisfy(\.isFinite),
-                  samples.contains(where: { abs($0) > 0.0001 }) else {
-                machine.complete()
-                session = nil
-                presentNotice("Речь не обнаружена", detail: "Запись слишком короткая или тихая.", tone: .warning)
-                return
-            }
             transcriptionTask = Task {
+                await preview?.value
                 do {
-                    let text = try await transcriber.transcribe(samples, language: hint)
                     try Task.checkCancellation()
-                    guard session == id else { throw CancellationError() }
-                    result = text
-                    if !text.isEmpty {
-                        switch try TextDelivery.deliver(text, mode: output, target: target) {
-                        case .copied:
-                            presentNotice("Скопировано", detail: "Нажмите ⌘V, чтобы вставить текст.", tone: .success)
-                        case .pasteRequested:
-                            presentNotice("Готово", detail: "Текст также в буфере обмена.", tone: .success)
-                        case .copiedForManualPaste(let reason):
-                            presentNotice("Скопировано", detail: reason, tone: .warning)
-                        }
-                    } else { presentNotice("Речь не распознана", detail: "Попробуйте записать фразу ещё раз.", tone: .warning) }
+                    if samples.count >= 3200,
+                       samples.allSatisfy(\.isFinite),
+                       samples.contains(where: { abs($0) > 0.0001 }) {
+                        let text = try await transcriber.transcribe(samples, language: hint)
+                        try Task.checkCancellation()
+                        guard session == id else { throw CancellationError() }
+                        result = text
+                        if !text.isEmpty {
+                            switch try TextDelivery.deliver(text, mode: output, target: target) {
+                            case .copied:
+                                presentNotice("Скопировано", detail: "Нажмите ⌘V, чтобы вставить текст.", tone: .success)
+                            case .pasteRequested:
+                                presentNotice("Готово", detail: "Текст также в буфере обмена.", tone: .success)
+                            case .copiedForManualPaste(let reason):
+                                presentNotice("Скопировано", detail: reason, tone: .warning)
+                            }
+                        } else { presentNotice("Речь не распознана", detail: "Попробуйте записать фразу ещё раз.", tone: .warning) }
+                    } else {
+                        presentNotice("Речь не обнаружена", detail: "Запись слишком короткая или тихая.", tone: .warning)
+                    }
                 } catch is CancellationError {
                     presentNotice("Отменено", detail: "Результат не скопирован и не вставлен.", tone: .warning)
                 } catch {
@@ -285,6 +329,9 @@ final class AppController: ObservableObject {
                 }
                 machine.complete()
                 session = nil
+                self.target = nil
+                liveTranscript = ""
+                liveTranscriptError = ""
                 transcriptionTask = nil
                 cancelling = false
                 updateStatus()
@@ -294,14 +341,45 @@ final class AppController: ObservableObject {
         updateStatus()
     }
 
+    private func startLiveTranscription(session id: UUID) {
+        let transcriber = transcriber
+        let hint = sessionLanguage
+        liveTranscription.start(snapshot: { [weak self] in
+            guard let self, self.session == id, case .recording = self.phase else { return [] }
+            return self.recorder.previewSamples()
+        }, transcribe: { samples in
+            try await transcriber.transcribe(samples, language: hint)
+        }, update: { [weak self] update in
+            guard let self, self.session == id, case .recording = self.phase else { return }
+            switch update {
+            case .success(let text): self.liveTranscript = text
+            case .failure(let error): self.liveTranscriptError = error.localizedDescription
+            }
+        })
+    }
+
     func cancel() {
         guard machine.cancel() != nil else { return }
+        let preview = liveTranscription.stop()
         recorder.stop()
         recordingStartedAt = nil
         session = nil
         target = nil
         result = ""
-        if let transcriptionTask { cancelling = true; transcriptionTask.cancel() }
+        liveTranscript = ""
+        liveTranscriptError = ""
+        if let transcriptionTask {
+            cancelling = true
+            transcriptionTask.cancel()
+        } else if let preview {
+            cancelling = true
+            transcriptionTask = Task {
+                await preview.value
+                transcriptionTask = nil
+                cancelling = false
+                updateStatus()
+            }
+        }
         presentNotice("Отменено", detail: "Результат не скопирован и не вставлен.", tone: .warning)
     }
 
@@ -319,10 +397,13 @@ final class AppController: ObservableObject {
     }
 
     private func updateStatus() {
-        do { try hotkeys.setCancellationEnabled(phase != .idle) }
+        do {
+            try hotkeys.setCancellationEnabled(phase != .idle)
+            try hotkeys.setFinishingEnabled(finishOnEnter && phase == .recording(.toggle))
+        }
         catch {
             cancel()
-            notice = DictationNotice(title: "Шорткат отмены недоступен", detail: error.localizedDescription, tone: .error)
+            notice = DictationNotice(title: "Шорткат недоступен", detail: error.localizedDescription, tone: .error)
             message = error.localizedDescription
         }
         onStatusChanged?()

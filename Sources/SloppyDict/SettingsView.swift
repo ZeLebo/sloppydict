@@ -8,7 +8,7 @@ struct SettingsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             HStack(spacing: 12) {
-                Image(systemName: "waveform").font(.system(size: 28)).foregroundStyle(.tint)
+                Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: 40, height: 40)
                 VStack(alignment: .leading, spacing: 3) {
                     Text("SloppyDict").font(.title2.bold())
                     Text("Диктовка на этом Mac").foregroundStyle(.secondary)
@@ -63,6 +63,22 @@ struct SettingsView: View {
                 Spacer()
                 Button("Сбросить", action: controller.resetShortcuts).controlSize(.small)
                     .disabled(controller.busy)
+            }
+
+            Toggle("Enter завершает запись в режиме старт/стоп", isOn: $controller.finishOnEnter)
+                .disabled(controller.busy)
+
+            Picker("Оформление плашки", selection: $controller.hudStyle) {
+                ForEach(HUDStyle.allCases, id: \.self) { style in Text(style.title).tag(style) }
+            }
+            Picker("Размер текста в плашке", selection: $controller.hudTextSize) {
+                ForEach(HUDTextSize.allCases, id: \.self) { size in Text(size.title).tag(size) }
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                Toggle("Показывать расшифровку во время речи", isOn: $controller.showsLiveTranscript)
+                    .disabled(controller.busy)
+                Text("Черновик последних фраз может меняться. Вставляется только итоговый текст после остановки.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
 
             Picker("Язык", selection: $controller.language) {

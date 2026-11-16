@@ -6,11 +6,13 @@ final class HotkeyMonitor {
     var shortcuts = ShortcutPair()
     var onKey: ((RecordingMode, Bool) -> Void)?
     var onCancel: (() -> Void)?
-    private enum Action { case key(RecordingMode), cancel }
+    var onFinish: (() -> Void)?
+    private enum Action { case key(RecordingMode), cancel, finish }
     private var eventHandler: EventHandlerRef?
     private var delivery: HotkeyEventDelivery?
-    private var registrations: [UInt32: (reference: EventHotKeyRef, action: Action)] = [:]
+    private var registrations: [UInt32: (reference: EventHotKeyRef, action: Action, keyCode: UInt16)] = [:]
     private var cancelIdentifier: UInt32?
+    private var finishing = FinishingHotkeys()
     private var nextIdentifier: UInt32 = 0
     private var pressed: Set<UInt32> = []
 
@@ -49,6 +51,7 @@ final class HotkeyMonitor {
         for registration in registrations.values { UnregisterEventHotKey(registration.reference) }
         registrations.removeAll()
         cancelIdentifier = nil
+        finishing = FinishingHotkeys()
         if let eventHandler { RemoveEventHandler(eventHandler) }
         eventHandler = nil
         delivery = nil
@@ -61,12 +64,37 @@ final class HotkeyMonitor {
             guard eventHandler != nil else { throw DictationError.message("Шорткаты не подключены.") }
             cancelIdentifier = try register(Shortcut(keyCode: UInt16(kVK_Escape), modifiers: 0), action: .cancel)
         } else if let identifier = cancelIdentifier {
-            if let registration = registrations.removeValue(forKey: identifier) {
-                UnregisterEventHotKey(registration.reference)
-            }
-            pressed.remove(identifier)
+            unregister(identifier)
             cancelIdentifier = nil
         }
+    }
+
+    func setFinishingEnabled(_ enabled: Bool) throws {
+        guard enabled != finishing.enabled else { return }
+        if enabled {
+            guard eventHandler != nil else { throw DictationError.message("Шорткаты не подключены.") }
+            var added: Set<UInt32> = []
+            do {
+                for key in [UInt16(kVK_Return), UInt16(kVK_ANSI_KeypadEnter)] {
+                    // A press from a cancelled session must finish releasing before it can finish a new one.
+                    guard !finishing.retiring.contains(where: { registrations[$0]?.keyCode == key }) else { continue }
+                    added.insert(try register(Shortcut(keyCode: key, modifiers: 0), action: .finish))
+                }
+            } catch {
+                for identifier in added { unregister(identifier) }
+                throw error
+            }
+            finishing.activate(added)
+        } else {
+            for identifier in finishing.deactivate(pressed: pressed) { unregister(identifier) }
+        }
+    }
+
+    private func unregister(_ identifier: UInt32) {
+        if let registration = registrations.removeValue(forKey: identifier) {
+            UnregisterEventHotKey(registration.reference)
+        }
+        pressed.remove(identifier)
     }
 
     private func register(_ shortcut: Shortcut, action: Action) throws -> UInt32 {
@@ -82,9 +110,12 @@ final class HotkeyMonitor {
             if case .cancel = action {
                 throw DictationError.message("Не удалось подключить Esc для отмены (OSStatus \(status)). Диктовка остановлена.")
             }
+            if case .finish = action {
+                throw DictationError.message("Не удалось подключить Enter для завершения (OSStatus \(status)). Диктовка остановлена.")
+            }
             throw DictationError.message("Не удалось зарегистрировать \(shortcut.display). Выберите свободное сочетание (OSStatus \(status)).")
         }
-        registrations[identifier] = (reference, action)
+        registrations[identifier] = (reference, action, shortcut.keyCode)
         return identifier
     }
 
@@ -98,6 +129,14 @@ final class HotkeyMonitor {
         switch registration.action {
         case .key(let mode): onKey?(mode, down)
         case .cancel: if down { onCancel?() }
+        case .finish:
+            guard !down else { return }
+            // Finish on release, keeping the entire Enter press and its repeats out of the target app.
+            switch finishing.release(identifier) {
+            case .finish: onFinish?()
+            case .unregister: unregister(identifier)
+            case .keepRegistered, .ignore: break
+            }
         }
     }
 }

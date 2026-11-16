@@ -3,6 +3,37 @@ import Foundation
 
 let dictationHotkeySignature: OSType = 0x53444943 // SDIC
 
+struct FinishingHotkeys {
+    enum Release { case finish, keepRegistered, unregister, ignore }
+    private(set) var enabled = false
+    private(set) var active: Set<UInt32> = []
+    private(set) var retiring: Set<UInt32> = []
+
+    mutating func activate(_ identifiers: Set<UInt32>) {
+        active = identifiers
+        enabled = true
+    }
+
+    mutating func deactivate(pressed: Set<UInt32>) -> Set<UInt32> {
+        enabled = false
+        retiring.formUnion(active.intersection(pressed))
+        let released = active.subtracting(pressed)
+        active.removeAll()
+        return released
+    }
+
+    mutating func release(_ identifier: UInt32) -> Release {
+        if retiring.remove(identifier) != nil {
+            if enabled {
+                active.insert(identifier)
+                return .keepRegistered
+            }
+            return .unregister
+        }
+        return enabled && active.contains(identifier) ? .finish : .ignore
+    }
+}
+
 @MainActor
 final class HotkeyEventDelivery {
     private var active = true

@@ -5,6 +5,7 @@
 !/Package.swift
 !/Package.resolved
 !/README.md
+!/CHANGELOG.md
 !/THIRD_PARTY_NOTICES.md
 !/LICENSE
 !/LICENSE.*
@@ -146,5 +147,23 @@ secrets/
 *.alias
 *.lnk
 *.xcconfig.local
+
+# Design mockups, screenshots and exported media stay local.
+*.html
+*.htm
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.webp
+*.avif
+*.svg
+*.ico
+*.icns
+*.fig
+*.sketch
+
+# Required source asset for the application icon, validated by check-source.py.
+!/Resources/AppIcon.png
 
 # Content and symlink targets require a separate review before publication.

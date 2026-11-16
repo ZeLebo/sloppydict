@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Check files eligible for publication, including staged content and commit history."""
 import re
+import struct
 import subprocess
 import sys
+import zlib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,6 +26,40 @@ def git(*args):
     return subprocess.check_output(["git", *args], cwd=ROOT)
 
 
+def is_app_icon(data):
+    """Only the 1024px RGBA icon is allowed; text, EXIF and other metadata are rejected."""
+    if not data.startswith(b"\x89PNG\r\n\x1a\n") or len(data) > 8 * 1024 * 1024:
+        return False
+    position = 8
+    compressed = bytearray()
+    while position + 12 <= len(data):
+        length = struct.unpack(">I", data[position:position + 4])[0]
+        end = position + length + 12
+        if end > len(data):
+            return False
+        kind = data[position + 4:position + 8]
+        payload = data[position + 8:end - 4]
+        if zlib.crc32(kind + payload) != struct.unpack(">I", data[end - 4:end])[0]:
+            return False
+        if kind == b"IHDR":
+            if position != 8 or payload != struct.pack(">IIBBBBB", 1024, 1024, 8, 6, 0, 0, 0):
+                return False
+        elif kind == b"IDAT" and position > 8:
+            compressed.extend(payload)
+        elif kind == b"IEND" and not payload and end == len(data) and compressed:
+            expected = (1024 * 4 + 1) * 1024
+            decoder = zlib.decompressobj()
+            try:
+                pixels = decoder.decompress(compressed, expected + 1)
+            except zlib.error:
+                return False
+            return len(pixels) == expected and decoder.eof and not decoder.unused_data
+        else:
+            return False
+        position = end
+    return False
+
+
 def check(path, data, mode, location):
     problems = []
     ignored = subprocess.run(
@@ -38,7 +74,10 @@ def check(path, data, mode, location):
         problems.append("personal absolute path")
     if SECRET.search(data):
         problems.append("credential or private key")
-    if b"\x00" in data and mode != "120000":
+    if path == "Resources/AppIcon.png":
+        if not is_app_icon(data):
+            problems.append("app icon must be a metadata-free 1024px RGBA PNG")
+    elif b"\x00" in data and mode != "120000":
         problems.append("binary file requires review")
     return [f"{location}: {path}: {problem}" for problem in problems]
 

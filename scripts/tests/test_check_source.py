@@ -1,8 +1,10 @@
 import importlib.util
 import io
+import struct
 import subprocess
 import tempfile
 import unittest
+import zlib
 from contextlib import redirect_stdout, redirect_stderr
 from pathlib import Path
 from unittest.mock import patch
@@ -13,6 +15,33 @@ spec.loader.exec_module(source_check)
 
 
 class SourceCheckTests(unittest.TestCase):
+    @staticmethod
+    def png_chunk(kind, payload):
+        return struct.pack(">I", len(payload)) + kind + payload + struct.pack(">I", zlib.crc32(kind + payload))
+
+    @classmethod
+    def icon_png(cls):
+        return (b"\x89PNG\r\n\x1a\n"
+                + cls.png_chunk(b"IHDR", struct.pack(">IIBBBBB", 1024, 1024, 8, 6, 0, 0, 0))
+                + cls.png_chunk(b"IDAT", zlib.compress(bytes((1024 * 4 + 1) * 1024)))
+                + cls.png_chunk(b"IEND", b""))
+
+    def test_only_the_reviewed_icon_path_accepts_png(self):
+        icon = self.icon_png()
+        self.assertEqual(source_check.check("Resources/AppIcon.png", icon, "100644", "test"), [])
+        self.assertTrue(source_check.check("Resources/Other.png", icon, "100644", "test"))
+
+    def test_icon_metadata_is_rejected(self):
+        icon = self.icon_png()
+        for kind in [b"tEXt", b"iTXt", b"eXIf"]:
+            data = icon[:-12] + self.png_chunk(kind, b"metadata") + icon[-12:]
+            self.assertFalse(source_check.is_app_icon(data))
+
+    def test_icon_malformed_or_trailing_data_is_rejected(self):
+        icon = self.icon_png()
+        for data in [icon[:-1], icon + b"trailing", icon[:29] + b"bad!" + icon[33:], b"not an icon"]:
+            self.assertFalse(source_check.is_app_icon(data))
+
     def test_plain_source_and_urls_are_allowed(self):
         self.assertEqual(source_check.check("Sources/App.swift", b"let x = 1", "100644", "test"), [])
 
